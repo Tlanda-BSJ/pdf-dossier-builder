@@ -1,27 +1,42 @@
 # PDF Dossier Builder
 
-Genera un dossier PDF completo siguiendo automáticamente los hipervínculos desde un índice general.
+Herramienta para generar un único PDF a partir de un índice, siguiendo automáticamente los enlaces a otros documentos y convirtiéndolos en enlaces internos.
 
-## Cómo obtener el .exe (sin instalar nada)
+## 🚀 Características
 
-1. Crea una cuenta gratuita en https://github.com
-2. Crea un repositorio nuevo (New repository) → nombre: `pdf-dossier-builder` → Public → Create
-3. Sube estos tres archivos manteniendo la estructura de carpetas:
-   - `pdf_dossier.py`
-   - `.github/workflows/build.yml`
-4. GitHub compilará el .exe automáticamente en ~3 minutos
-5. Ve a la pestaña **Actions** → haz clic en el workflow → descarga **PDFDossierBuilder-Windows**
+* Fusiona múltiples PDFs automáticamente
+* Detecta enlaces externos (`/GoToR`, `/Launch`)
+* Convierte enlaces externos en internos dentro del dossier
+* Genera un ejecutable `.exe` sin instalación
+* Compatible con rutas relativas y absolutas
 
-## Uso del programa
+## 🧠 Cómo funciona
 
-1. Ejecuta `PDFDossierBuilder.exe` (no requiere instalación)
-2. Pulsa **Examinar** y selecciona tu índice general PDF
-3. Pulsa **Generar Dossier**
-4. El dossier se guarda en la misma carpeta que el índice
+1. Seleccionas un PDF índice
+2. El programa detecta enlaces a otros PDFs
+3. Fusiona todos los documentos
+4. Reescribe los enlaces para que funcionen dentro del PDF final
 
-## Compatibilidad
+## 📦 Instalación (modo desarrollo)
 
-- Creado con Nitro PDF (vínculos /Launch y /GoToR)
-- Rutas absolutas Windows y relativas
-- Vínculos de retroceso ignorados automáticamente
-- Windows 10 / 11
+pip install pypdf
+python pdf_dossier.py
+
+## 🪟 Descargar ejecutable (.exe)
+
+1. Ve a la pestaña **Actions**
+2. Ejecuta el workflow
+3. Descarga el archivo generado
+
+## ⚠️ Limitaciones
+
+* Los PDFs se identifican por nombre de archivo
+* Puede fallar si hay nombres duplicados
+* No todos los tipos de enlaces PDF están soportados
+
+## 🛠️ Tecnologías
+
+* Python 3.11
+* pypdf
+* Tkinter
+* PyInstaller
