@@ -23,12 +23,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install pypdf pymupdf pyinstaller
 
-      - name: Compilar EXE con PyInstaller
-        run: |
-          pyinstaller --onefile --windowed --name PDFDossierBuilder ^
-          --hidden-import=fitz ^
-          --hidden-import=pymupdf ^
-          --collect-all fitz ^
+            - name: Compilar EXE con PyInstaller
+        run: >
+          pyinstaller --onefile --windowed --name PDFDossierBuilder
+          --hidden-import=fitz
+          --hidden-import=pymupdf
+          --collect-all fitz
           pdf_dossier.py
 
       - name: Subir EXE como artefacto
