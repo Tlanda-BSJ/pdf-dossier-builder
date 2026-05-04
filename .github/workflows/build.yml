@@ -27,7 +27,7 @@ jobs:
         pyinstaller --onefile --noconsole pdf_dossier.py
 
     - name: Subir EXE
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: PDFDossierBuilder
         path: dist/pdf_dossier.exe
