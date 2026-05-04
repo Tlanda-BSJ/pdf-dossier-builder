@@ -1,34 +1,32 @@
-name: Compilar PDFDossierBuilder.exe
+name: Compilar EXE
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
 
     steps:
-      - name: Descargar código
-        uses: actions/checkout@v4
+    - name: Descargar código
+      uses: actions/checkout@v3
 
-      - name: Instalar Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+    - name: Instalar Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
 
-      - name: Instalar dependencias
-        run: |
-          pip install pypdf pyinstaller
+    - name: Instalar dependencias
+      run: |
+        pip install pypdf pyinstaller
 
-      - name: Compilar .exe
-        run: |
-          pyinstaller --onefile --windowed --name "PDFDossierBuilder" --hidden-import pypdf --hidden-import tkinter pdf_dossier.py
+    - name: Crear EXE
+      run: |
+        pyinstaller --onefile --noconsole pdf_dossier_pro.py
 
-      - name: Subir .exe como artefacto
-        uses: actions/upload-artifact@v4
-        with:
-          name: PDFDossierBuilder-Windows
-          path: dist\PDFDossierBuilder.exe
-          retention-days: 30
+    - name: Subir EXE
+      uses: actions/upload-artifact@v3
+      with:
+        name: PDFDossierBuilder
+        path: dist/pdf_dossier_pro.exe
