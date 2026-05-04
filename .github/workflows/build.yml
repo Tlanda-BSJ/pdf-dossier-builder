@@ -23,15 +23,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install pypdf pymupdf pyinstaller
 
-            - name: Compilar EXE con PyInstaller
-        run: >
-          pyinstaller --onefile --windowed --name PDFDossierBuilder
-          --hidden-import=fitz
-          --hidden-import=pymupdf
-          --collect-all fitz
-          pdf_dossier.py
+      - name: Compilar EXE
+        run: |
+          pyinstaller --onefile --windowed --name PDFDossierBuilder --hidden-import=fitz --hidden-import=pymupdf --collect-all fitz pdf_dossier.py
 
-      - name: Subir EXE como artefacto
+      - name: Subir artefacto
         uses: actions/upload-artifact@v4
         with:
           name: PDFDossierBuilder-Windows
