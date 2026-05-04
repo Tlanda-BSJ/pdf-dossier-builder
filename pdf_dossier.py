@@ -1,7 +1,3 @@
-"""
-PDF Dossier Builder - versión funcional con enlaces y marcadores
-"""
-
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import os
@@ -10,28 +6,23 @@ from pypdf import PdfReader, PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, ArrayObject, NumberObject
 
 
-# ─── NORMALIZAR RUTAS ─────────────────────────────────────────────
 def normalizar_ruta(ruta):
     if not ruta:
         return ""
     ruta = str(ruta)
-
     try:
         ruta = urllib.parse.unquote(ruta)
     except Exception:
         pass
-
-    # ✅ ESTA ES LA LÍNEA IMPORTANTE (ARREGLADA)
     return ruta.replace("/", os.sep).replace("\\", os.sep).strip()
 
 
-# ─── FUSIONAR PDFs + MARCADORES + ENLACES ─────────────────────────
 def fusionar_pdfs(lista_pdfs, salida_path):
     writer = PdfWriter()
     mapa_paginas = {}
     pagina_actual = 0
 
-    # 1️⃣ Añadir PDFs + marcar inicio
+    # Añadir PDFs + marcadores
     for pdf_path in lista_pdfs:
         reader = PdfReader(pdf_path)
         mapa_paginas[pdf_path] = pagina_actual
@@ -43,7 +34,7 @@ def fusionar_pdfs(lista_pdfs, salida_path):
             writer.add_page(page)
             pagina_actual += 1
 
-    # 2️⃣ Reescribir enlaces
+    # Reescribir enlaces
     for pdf_path in lista_pdfs:
         reader = PdfReader(pdf_path)
 
@@ -98,28 +89,21 @@ def fusionar_pdfs(lista_pdfs, salida_path):
                 except Exception:
                     continue
 
-    # 3️⃣ Guardar resultado
     with open(salida_path, "wb") as f:
         writer.write(f)
 
 
-# ─── INTERFAZ ─────────────────────────────────────────────────────
-def seleccionar_archivos():
-    return filedialog.askopenfilenames(filetypes=[("PDF files", "*.pdf")])
-
-
 def ejecutar():
-    archivos = seleccionar_archivos()
+    archivos = filedialog.askopenfilenames(filetypes=[("PDF files", "*.pdf")])
     if not archivos:
         return
 
     salida = os.path.join(os.path.dirname(archivos[0]), "dossier_final.pdf")
     fusionar_pdfs(archivos, salida)
 
-    messagebox.showinfo("Listo", f"PDF generado:\n{salida}")
+    messagebox.showinfo("Listo", f"PDF generado:\\n{salida}")
 
 
-# ─── APP ──────────────────────────────────────────────────────────
 app = tk.Tk()
 app.title("PDF Dossier Builder")
 app.geometry("300x150")
