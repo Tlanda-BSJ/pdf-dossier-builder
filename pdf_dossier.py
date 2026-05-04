@@ -14,7 +14,7 @@ def normalizar_ruta(ruta):
         ruta = urllib.parse.unquote(ruta)
     except Exception:
         pass
-    return ruta.replace("/", os.sep).replace("\\", os.sep).strip()
+    return os.path.normpath(ruta)
 
 
 def fusionar_pdfs(lista_pdfs, salida_path):
@@ -86,7 +86,8 @@ def fusionar_pdfs(lista_pdfs, salida_path):
                             annot[NameObject("/A")] = nueva_accion
                             break
 
-                except Exception:
+                except Exception as e:
+                    print(f"[WARN] Error procesando anotación: {e}")
                     continue
 
     with open(salida_path, "wb") as f:
@@ -99,11 +100,15 @@ def ejecutar():
         return
 
     salida = os.path.join(os.path.dirname(archivos[0]), "dossier_final.pdf")
-    fusionar_pdfs(archivos, salida)
 
-    messagebox.showinfo("Listo", f"PDF generado:\\n{salida}")
+    try:
+        fusionar_pdfs(archivos, salida)
+        messagebox.showinfo("Listo", f"PDF generado:\n{salida}")
+    except Exception as e:
+        messagebox.showerror("Error", str(e))
 
 
+# Interfaz
 app = tk.Tk()
 app.title("PDF Dossier Builder")
 app.geometry("300x150")
@@ -112,4 +117,3 @@ btn = tk.Button(app, text="Seleccionar PDFs y generar", command=ejecutar)
 btn.pack(expand=True)
 
 app.mainloop()
-``
