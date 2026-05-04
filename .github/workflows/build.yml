@@ -23,7 +23,8 @@ jobs:
 
     - name: Crear EXE
       run: |
-        pyinstaller --onefile pdf_dossier.py
+        pyinstaller --onefile --noconsole --hidden-import=tkinter pdf_dossier.py
+
 
     - name: Subir EXE
       uses: actions/upload-artifact@v4
