@@ -1,42 +1,131 @@
+"""
+PDF Dossier Builder - versión funcional con enlaces y marcadores
+"""
+
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import os
+import urllib.parse
 from pypdf import PdfReader, PdfWriter
+from pypdf.generic import DictionaryObject, NameObject, ArrayObject, NumberObject
 
 
+# ─── NORMALIZAR RUTAS ─────────────────────────────────────────────
 def normalizar_ruta(ruta):
     if not ruta:
         return ""
-    return ruta.replace("/", os.sep).replace("\\\\", os.sep).strip()
+    ruta = str(ruta)
+
+    try:
+        ruta = urllib.parse.unquote(ruta)
+    except Exception:
+        pass
+
+    # ✅ ESTA ES LA LÍNEA IMPORTANTE (ARREGLADA)
+    return ruta.replace("/", os.sep).replace("\\", os.sep).strip()
 
 
+# ─── FUSIONAR PDFs + MARCADORES + ENLACES ─────────────────────────
 def fusionar_pdfs(lista_pdfs, salida_path):
     writer = PdfWriter()
+    mapa_paginas = {}
+    pagina_actual = 0
 
-    for pdf in lista_pdfs:
-        reader = PdfReader(pdf)
+    # 1️⃣ Añadir PDFs + marcar inicio
+    for pdf_path in lista_pdfs:
+        reader = PdfReader(pdf_path)
+        mapa_paginas[pdf_path] = pagina_actual
+
+        titulo = os.path.splitext(os.path.basename(pdf_path))[0]
+        writer.add_outline_item(titulo, pagina_actual)
+
         for page in reader.pages:
             writer.add_page(page)
+            pagina_actual += 1
 
+    # 2️⃣ Reescribir enlaces
+    for pdf_path in lista_pdfs:
+        reader = PdfReader(pdf_path)
+
+        for page in reader.pages:
+            if "/Annots" not in page:
+                continue
+
+            for annot_ref in page["/Annots"]:
+                try:
+                    annot = annot_ref.get_object()
+
+                    if "/A" not in annot:
+                        continue
+
+                    action = annot["/A"]
+
+                    if action.get("/S") not in ["/GoToR", "/Launch"]:
+                        continue
+
+                    ruta = action.get("/F")
+                    destino = action.get("/D")
+
+                    if not ruta:
+                        continue
+
+                    ruta = normalizar_ruta(ruta)
+
+                    for destino_pdf in mapa_paginas:
+                        if os.path.basename(destino_pdf) == os.path.basename(ruta):
+
+                            base = mapa_paginas[destino_pdf]
+                            pagina_rel = 0
+
+                            if isinstance(destino, list) and len(destino) > 0:
+                                if isinstance(destino[0], (int, NumberObject)):
+                                    pagina_rel = int(destino[0])
+
+                            pagina_final = base + pagina_rel
+
+                            nueva_accion = DictionaryObject()
+                            nueva_accion.update({
+                                NameObject("/S"): NameObject("/GoTo"),
+                                NameObject("/D"): ArrayObject([
+                                    NumberObject(pagina_final),
+                                    NameObject("/Fit")
+                                ])
+                            })
+
+                            annot[NameObject("/A")] = nueva_accion
+                            break
+
+                except Exception:
+                    continue
+
+    # 3️⃣ Guardar resultado
     with open(salida_path, "wb") as f:
         writer.write(f)
 
 
+# ─── INTERFAZ ─────────────────────────────────────────────────────
+def seleccionar_archivos():
+    return filedialog.askopenfilenames(filetypes=[("PDF files", "*.pdf")])
+
+
 def ejecutar():
-    archivos = filedialog.askopenfilenames(filetypes=[("PDF", "*.pdf")])
+    archivos = seleccionar_archivos()
     if not archivos:
         return
 
     salida = os.path.join(os.path.dirname(archivos[0]), "dossier_final.pdf")
     fusionar_pdfs(archivos, salida)
 
-    messagebox.showinfo("OK", "PDF creado correctamente")
+    messagebox.showinfo("Listo", f"PDF generado:\n{salida}")
 
 
+# ─── APP ──────────────────────────────────────────────────────────
 app = tk.Tk()
-app.title("PDF Builder")
-app.geometry("300x120")
+app.title("PDF Dossier Builder")
+app.geometry("300x150")
 
-tk.Button(app, text="Seleccionar PDFs", command=ejecutar).pack(expand=True)
+btn = tk.Button(app, text="Seleccionar PDFs y generar", command=ejecutar)
+btn.pack(expand=True)
 
 app.mainloop()
+``
