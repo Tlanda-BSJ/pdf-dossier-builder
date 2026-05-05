@@ -1,21 +1,26 @@
 """
-PDF Dossier Builder - versión mejorada con PyMuPDF
-- Fusiona PDFs siguiendo estructura recursiva existente
-- Reescribe enlaces a PDFs como navegación interna correcta
-- Compatible con Nitro PDF (/Launch, /GoToR, URI)
+PDF Dossier Builder v2 - Compatible con Nitro PDF
+- Fusiona todos los PDFs siguiendo vinculos /Launch y /GoToR
+- Recalcula TODOS los hipervinculos para que apunten a la pagina
+  correcta dentro del PDF fusionado final
+- Ignora vinculos de retroceso automaticamente
+- Sin instalacion requerida (empaquetado en .exe)
 """
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import threading
 import os
+import sys
 import urllib.parse
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import (
+    DictionaryObject, ArrayObject, NumberObject,
+    NameObject, NullObject
+)
 
-import fitz  # PyMuPDF (CLAVE)
 
-# ─────────────────────────────────────────────────────────────
-# RUTAS
-# ─────────────────────────────────────────────────────────────
+# ─── RESOLUCIÓN DE RUTAS ────────────────────────────────────────────────────
 
 def normalizar_ruta(ruta):
     if not ruta:
@@ -28,249 +33,481 @@ def normalizar_ruta(ruta):
     return ruta.replace("/", os.sep).replace("\\", os.sep).strip()
 
 
-def resolver_ruta(ruta_raw, directorio_padre, directorio_raiz):
+def resolver_ruta(ruta_raw, dir_padre, dir_raiz):
+    """
+    Resuelve la ruta con prioridad:
+    1. Absoluta directa
+    2. Relativa al PDF padre
+    3. Busqueda por nombre en el arbol de carpetas
+    """
     ruta = normalizar_ruta(ruta_raw)
     if not ruta:
         return None
 
-    # absoluta
     if os.path.isabs(ruta) and os.path.isfile(ruta):
         return os.path.normpath(ruta)
 
-    # relativa
-    candidato = os.path.normpath(os.path.join(directorio_padre, ruta))
+    candidato = os.path.normpath(os.path.join(dir_padre, ruta))
     if os.path.isfile(candidato):
         return candidato
 
-    # búsqueda global
     nombre = os.path.basename(ruta)
-    for root, dirs, files in os.walk(directorio_raiz):
+    for root, dirs, files in os.walk(dir_raiz):
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
         if nombre in files:
             return os.path.normpath(os.path.join(root, nombre))
 
     return None
 
 
-# ─────────────────────────────────────────────────────────────
-# EXTRACCIÓN DE VÍNCULOS (TU LÓGICA CONSERVADA)
-# ─────────────────────────────────────────────────────────────
+# ─── EXTRACCIÓN DE VÍNCULOS ─────────────────────────────────────────────────
 
-def extraer_vinculos_archivos(pdf_path):
-    from pypdf import PdfReader
-
+def extraer_vinculos_pdf(pdf_path):
+    """
+    Extrae vinculos /Launch y /GoToR que abren archivos .pdf externos.
+    Ignora /GoTo (saltos internos) y vinculos a no-PDF.
+    Devuelve lista de rutas raw sin resolver.
+    """
     vinculos = []
-
     try:
         reader = PdfReader(pdf_path)
-
         for page in reader.pages:
             if "/Annots" not in page:
                 continue
-
             for annot_ref in page["/Annots"]:
                 try:
                     annot = annot_ref.get_object()
-                except:
+                except Exception:
+                    continue
+                if annot.get("/Subtype") != "/Link":
+                    continue
+                action = annot.get("/A")
+                if not action:
+                    continue
+                try:
+                    action = action.get_object()
+                except Exception:
+                    pass
+
+                subtype = action.get("/S")
+                ruta = None
+
+                if subtype == "/Launch":
+                    win = action.get("/Win")
+                    if win:
+                        try:
+                            win = win.get_object()
+                        except Exception:
+                            pass
+                        f = win.get("/F") or win.get("/UF") or ""
+                    else:
+                        f = action.get("/F") or action.get("/UF") or ""
+                    if hasattr(f, "get_object"):
+                        try:
+                            f = f.get_object()
+                        except Exception:
+                            pass
+                    if isinstance(f, dict):
+                        f = f.get("/F") or f.get("/UF") or ""
+                    ruta = str(f).strip()
+
+                elif subtype == "/GoToR":
+                    f = action.get("/F") or ""
+                    if hasattr(f, "get_object"):
+                        try:
+                            f = f.get_object()
+                        except Exception:
+                            pass
+                    if isinstance(f, dict):
+                        f = f.get("/F") or f.get("/UF") or ""
+                    ruta = str(f).strip()
+
+                # /GoTo → interno, ignorar
+                # /URI → ignorar
+
+                if ruta and ruta.lower().endswith(".pdf"):
+                    vinculos.append(ruta)
+    except Exception:
+        pass
+    return vinculos
+
+
+# ─── PROCESADO RECURSIVO ────────────────────────────────────────────────────
+
+def procesar_pdf(pdf_path, dir_raiz, visitados, lista, log_cb, nivel=0):
+    """
+    Sigue recursivamente los vinculos de un PDF.
+    Los retrocesos (PDF ya visitado) se ignoran automaticamente.
+    """
+    pdf_path = os.path.normpath(pdf_path)
+
+    if pdf_path in visitados:
+        log_cb(f"{'  ' * nivel}retroceso ignorado: {os.path.basename(pdf_path)}")
+        return
+    if not os.path.isfile(pdf_path):
+        log_cb(f"{'  ' * nivel}NO ENCONTRADO: {pdf_path}")
+        return
+
+    visitados.add(pdf_path)
+    lista.append(pdf_path)
+    log_cb(f"{'  ' * nivel}OK  {os.path.relpath(pdf_path, dir_raiz)}")
+
+    dir_padre = os.path.dirname(pdf_path)
+    for ruta_raw in extraer_vinculos_pdf(pdf_path):
+        res = resolver_ruta(ruta_raw, dir_padre, dir_raiz)
+        if res:
+            procesar_pdf(res, dir_raiz, visitados, lista, log_cb, nivel + 1)
+        else:
+            log_cb(f"{'  ' * (nivel + 1)}no resuelto: {os.path.basename(ruta_raw)}")
+
+
+# ─── CÁLCULO DE OFFSETS ─────────────────────────────────────────────────────
+
+def calcular_offsets(lista_pdfs):
+    """
+    Devuelve dict {ruta_norm -> pagina_inicio_base0} y total de paginas.
+    """
+    pdf_a_inicio = {}
+    offset = 0
+    for p in lista_pdfs:
+        pdf_a_inicio[os.path.normpath(p)] = offset
+        try:
+            offset += len(PdfReader(p).pages)
+        except Exception:
+            pass
+    return pdf_a_inicio, offset
+
+
+# ─── FUSIÓN CON RECÁLCULO DE VÍNCULOS ───────────────────────────────────────
+
+def fusionar_con_vinculos(lista_pdfs, salida_path, dir_raiz, log_cb):
+    """
+    1. Fusiona todos los PDFs en uno.
+    2. Reescribe todos los vinculos /Launch y /GoToR como /GoTo internos
+       apuntando a la pagina correcta dentro del dossier.
+    3. Vinculos a PDFs no incluidos en el dossier se eliminan.
+    """
+    pdf_a_inicio, total = calcular_offsets(lista_pdfs)
+    log_cb(f"Total paginas en dossier: {total}")
+    log_cb("Fusionando y recalculando vinculos...")
+
+    writer = PdfWriter()
+
+    # 1. Añadir todas las paginas
+    for pdf_path in lista_pdfs:
+        try:
+            reader = PdfReader(pdf_path)
+            for page in reader.pages:
+                writer.add_page(page)
+        except Exception as e:
+            log_cb(f"  Error leyendo {os.path.basename(pdf_path)}: {e}")
+
+    # Obtener el array de referencias a paginas del writer
+    kids = writer._pages.get_object()["/Kids"]
+
+    # 2. Recorrer y reescribir anotaciones
+    pagina_global = 0
+    vinculos_recalculados = 0
+    vinculos_eliminados = 0
+
+    for pdf_path in lista_pdfs:
+        dir_padre = os.path.dirname(pdf_path)
+        try:
+            num_paginas = len(PdfReader(pdf_path).pages)
+        except Exception:
+            continue
+
+        for i in range(num_paginas):
+            page = writer.pages[pagina_global + i]
+
+            if "/Annots" not in page:
+                continue
+
+            nuevas = ArrayObject()
+            for annot_ref in page["/Annots"]:
+                try:
+                    annot = annot_ref.get_object()
+                except Exception:
                     continue
 
                 if annot.get("/Subtype") != "/Link":
+                    nuevas.append(annot_ref)
                     continue
 
                 action = annot.get("/A")
                 if not action:
+                    nuevas.append(annot_ref)
                     continue
-
                 try:
                     action = action.get_object()
-                except:
+                except Exception:
                     pass
 
                 subtype = action.get("/S")
 
-                # Launch
-                if subtype == "/Launch":
-                    f = action.get("/F") or action.get("/UF") or ""
-                    vinculos.append(str(f))
+                # Solo procesar vinculos externos
+                if subtype not in ("/Launch", "/GoToR"):
+                    nuevas.append(annot_ref)
+                    continue
 
-                # GoToR
+                # Extraer ruta destino
+                ruta_raw = None
+                if subtype == "/Launch":
+                    win = action.get("/Win")
+                    if win:
+                        try:
+                            win = win.get_object()
+                        except Exception:
+                            pass
+                        f = win.get("/F") or win.get("/UF") or ""
+                    else:
+                        f = action.get("/F") or action.get("/UF") or ""
+                    if hasattr(f, "get_object"):
+                        try:
+                            f = f.get_object()
+                        except Exception:
+                            pass
+                    if isinstance(f, dict):
+                        f = f.get("/F") or f.get("/UF") or ""
+                    ruta_raw = str(f).strip()
+
                 elif subtype == "/GoToR":
                     f = action.get("/F") or ""
-                    vinculos.append(str(f))
+                    if hasattr(f, "get_object"):
+                        try:
+                            f = f.get_object()
+                        except Exception:
+                            pass
+                    if isinstance(f, dict):
+                        f = f.get("/F") or f.get("/UF") or ""
+                    ruta_raw = str(f).strip()
 
-                # URI
-                elif subtype == "/URI":
-                    uri = action.get("/URI", "")
-                    if isinstance(uri, bytes):
-                        uri = uri.decode("utf-8", errors="ignore")
-                    if str(uri).lower().endswith(".pdf"):
-                        vinculos.append(str(uri))
+                if not ruta_raw or not ruta_raw.lower().endswith(".pdf"):
+                    nuevas.append(annot_ref)
+                    continue
 
-    except:
-        pass
+                # Resolver ruta
+                res = resolver_ruta(ruta_raw, dir_padre, dir_raiz)
+                if res:
+                    res_norm = os.path.normpath(res)
+                else:
+                    res_norm = None
 
-    return vinculos
+                if res_norm and res_norm in pdf_a_inicio:
+                    # Calcular pagina destino y construir GoTo interno
+                    pag_dest = pdf_a_inicio[res_norm]
+                    page_ref = kids[pag_dest]  # referencia indirecta correcta
 
+                    nueva_accion = DictionaryObject({
+                        NameObject("/S"): NameObject("/GoTo"),
+                        NameObject("/D"): ArrayObject([
+                            page_ref,
+                            NameObject("/XYZ"),
+                            NullObject(),
+                            NullObject(),
+                            NullObject(),
+                        ])
+                    })
 
-# ─────────────────────────────────────────────────────────────
-# PROCESADO RECURSIVO (NO TOCADO)
-# ─────────────────────────────────────────────────────────────
+                    # Reconstruir anotacion conservando apariencia
+                    nueva_annot = DictionaryObject()
+                    for k, v in annot.items():
+                        if k != "/A":
+                            nueva_annot[NameObject(k)] = v
+                    nueva_annot[NameObject("/A")] = nueva_accion
+                    nuevas.append(nueva_annot)
+                    vinculos_recalculados += 1
 
-def procesar_pdf(pdf_path, directorio_raiz, visitados, lista_ordenada, log_cb, nivel=0):
-    pdf_path = os.path.normpath(pdf_path)
+                else:
+                    # PDF no incluido en dossier → eliminar vinculo
+                    vinculos_eliminados += 1
 
-    if pdf_path in visitados:
-        log_cb(f"{'  '*nivel}↩ ignorado: {os.path.basename(pdf_path)}")
-        return
+            page[NameObject("/Annots")] = nuevas
 
-    if not os.path.isfile(pdf_path):
-        log_cb(f"{'  '*nivel}✗ no existe: {pdf_path}")
-        return
+        pagina_global += num_paginas
 
-    visitados.add(pdf_path)
-    lista_ordenada.append(pdf_path)
+    log_cb(f"Vinculos recalculados: {vinculos_recalculados}")
+    if vinculos_eliminados:
+        log_cb(f"Vinculos eliminados (PDF no incluido): {vinculos_eliminados}")
 
-    log_cb(f"{'  '*nivel}✔ {os.path.basename(pdf_path)}")
+    with open(salida_path, "wb") as f:
+        writer.write(f)
 
-    directorio_padre = os.path.dirname(pdf_path)
-    vinculos = extraer_vinculos_archivos(pdf_path)
-
-    for v in vinculos:
-        ruta = resolver_ruta(v, directorio_padre, directorio_raiz)
-        if ruta:
-            procesar_pdf(ruta, directorio_raiz, visitados, lista_ordenada, log_cb, nivel+1)
-
-
-# ─────────────────────────────────────────────────────────────
-# FUSIÓN CON OFFSETS (NUEVO CORE)
-# ─────────────────────────────────────────────────────────────
-
-def fusionar_con_offsets(lista_pdfs, log_cb):
-    doc = fitz.open()
-    offsets = {}
-
-    pagina_actual = 0
-
-    for pdf in lista_pdfs:
-        try:
-            d = fitz.open(pdf)
-
-            offsets[os.path.normpath(pdf)] = pagina_actual
-
-            doc.insert_pdf(d)
-
-            pagina_actual += len(d)
-
-        except Exception as e:
-            log_cb(f"⚠ error {os.path.basename(pdf)}: {e}")
-
-    return doc, offsets
+    log_cb(f"Guardado: {os.path.basename(salida_path)}")
+    return vinculos_recalculados
 
 
-# ─────────────────────────────────────────────────────────────
-# REESCRIBIR ENLACES (CLAVE DEL PROYECTO)
-# ─────────────────────────────────────────────────────────────
-
-def reescribir_links(doc, offsets, log_cb):
-    total = 0
-
-    for i in range(len(doc)):
-        page = doc[i]
-        links = page.get_links()
-
-        for link in links:
-            uri = link.get("uri")
-
-            if not uri:
-                continue
-
-            uri = str(uri)
-
-            if ".pdf" not in uri.lower():
-                continue
-
-            nombre = os.path.normpath(os.path.basename(uri).split("#")[0])
-
-            if nombre not in offsets:
-                continue
-
-            pagina_dest = 0
-
-            if "#page=" in uri:
-                try:
-                    pagina_dest = int(uri.split("#page=")[1]) - 1
-                except:
-                    pass
-
-            nueva_pagina = offsets[nombre] + pagina_dest
-
-            page.insert_link({
-                "kind": fitz.LINK_GOTO,
-                "page": nueva_pagina,
-                "from": link["from"]
-            })
-
-            page.delete_link(link)
-            total += 1
-
-    log_cb(f"✔ links corregidos: {total}")
-
-
-# ─────────────────────────────────────────────────────────────
-# INTERFAZ (SIN CAMBIOS IMPORTANTES)
-# ─────────────────────────────────────────────────────────────
+# ─── INTERFAZ GRÁFICA ───────────────────────────────────────────────────────
 
 class App(tk.Tk):
 
+    BG      = "#1e1e2e"
+    PANEL   = "#2a2a3d"
+    ACCENT  = "#0078d4"
+    SUCCESS = "#28a745"
+    FG      = "#e0e0e0"
+    FG_DIM  = "#888888"
+    ENTRY   = "#313148"
+
     def __init__(self):
         super().__init__()
-        self.title("PDF Dossier Builder")
-        self.geometry("600x400")
+        self.title("PDF Dossier Builder v2")
+        self.configure(bg=self.BG)
+        self.resizable(False, False)
+        self._build_ui()
 
-        self.ruta = tk.StringVar()
+    def _build_ui(self):
+        # Cabecera
+        hdr = tk.Frame(self, bg=self.ACCENT)
+        hdr.grid(row=0, column=0, sticky="ew")
+        tk.Label(hdr, text="  PDF Dossier Builder",
+                 font=("Segoe UI", 14, "bold"),
+                 bg=self.ACCENT, fg="white",
+                 anchor="w").pack(fill="x", padx=12, pady=10)
 
-        tk.Entry(self, textvariable=self.ruta, width=60).pack(pady=10)
-        tk.Button(self, text="Seleccionar", command=self.sel).pack()
-        tk.Button(self, text="Generar", command=self.run).pack()
+        tk.Label(self,
+                 text="Selecciona el indice general y genera el dossier completo\n"
+                      "con todos los hipervinculos recalculados automaticamente.",
+                 font=("Segoe UI", 9), bg=self.BG, fg=self.FG_DIM,
+                 justify="left").grid(row=1, column=0, sticky="w", padx=20, pady=(12, 4))
 
-        self.log = tk.Text(self, height=15)
-        self.log.pack(fill="both", expand=True)
+        # Selector de archivo
+        frame_sel = tk.Frame(self, bg=self.PANEL)
+        frame_sel.grid(row=2, column=0, sticky="ew", padx=20, pady=4)
+        frame_sel.columnconfigure(1, weight=1)
 
-    def sel(self):
-        self.ruta.set(filedialog.askopenfilename())
+        tk.Label(frame_sel, text="Indice general:",
+                 font=("Segoe UI", 10, "bold"),
+                 bg=self.PANEL, fg=self.FG
+                 ).grid(row=0, column=0, padx=(12, 8), pady=10)
 
-    def logf(self, msg):
+        self.ruta_var = tk.StringVar()
+        tk.Entry(frame_sel, textvariable=self.ruta_var,
+                 width=50, bg=self.ENTRY, fg=self.FG,
+                 insertbackground=self.FG, relief="flat",
+                 font=("Segoe UI", 9)
+                 ).grid(row=0, column=1, padx=4, pady=10, sticky="ew")
+
+        tk.Button(frame_sel, text="Examinar...",
+                  command=self._seleccionar,
+                  bg=self.ACCENT, fg="white", relief="flat",
+                  font=("Segoe UI", 9), padx=10, cursor="hand2"
+                  ).grid(row=0, column=2, padx=(4, 12), pady=10)
+
+        # Boton principal
+        self.btn = tk.Button(self, text="Generar Dossier",
+                             command=self._iniciar,
+                             bg=self.SUCCESS, fg="white", relief="flat",
+                             font=("Segoe UI", 12, "bold"),
+                             padx=20, pady=10, cursor="hand2")
+        self.btn.grid(row=3, column=0, pady=(10, 6))
+
+        # Barra de progreso
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure("accent.Horizontal.TProgressbar",
+                        troughcolor=self.ENTRY, background=self.ACCENT,
+                        bordercolor=self.BG, lightcolor=self.ACCENT,
+                        darkcolor=self.ACCENT)
+        self.progress = ttk.Progressbar(self, mode="indeterminate",
+                                        length=500,
+                                        style="accent.Horizontal.TProgressbar")
+        self.progress.grid(row=4, column=0, padx=20, pady=(0, 4))
+
+        # Log
+        tk.Label(self, text="Registro de proceso:",
+                 font=("Segoe UI", 9),
+                 bg=self.BG, fg=self.FG_DIM
+                 ).grid(row=5, column=0, sticky="w", padx=20)
+
+        frame_log = tk.Frame(self, bg=self.BG)
+        frame_log.grid(row=6, column=0, padx=20, pady=(2, 4), sticky="ew")
+
+        self.log = tk.Text(frame_log, width=70, height=18,
+                           bg=self.ENTRY, fg=self.FG,
+                           font=("Consolas", 8), relief="flat",
+                           state="disabled", wrap="none")
+        sb = tk.Scrollbar(frame_log, command=self.log.yview, bg=self.ENTRY)
+        self.log.configure(yscrollcommand=sb.set)
+        self.log.pack(side="left", fill="both")
+        sb.pack(side="right", fill="y")
+
+        # Estado
+        self.estado = tk.StringVar(value="Listo")
+        tk.Label(self, textvariable=self.estado,
+                 font=("Segoe UI", 9, "italic"),
+                 bg=self.BG, fg=self.FG_DIM
+                 ).grid(row=7, column=0, pady=(0, 14))
+
+    def _seleccionar(self):
+        ruta = filedialog.askopenfilename(
+            title="Selecciona el indice general PDF",
+            filetypes=[("Archivos PDF", "*.pdf")]
+        )
+        if ruta:
+            self.ruta_var.set(ruta)
+
+    def _log(self, msg):
+        self.log.configure(state="normal")
         self.log.insert("end", msg + "\n")
         self.log.see("end")
-        self.update()
+        self.log.configure(state="disabled")
+        self.update_idletasks()
 
-    def run(self):
-        threading.Thread(target=self.process).start()
+    def _iniciar(self):
+        ruta = self.ruta_var.get().strip()
+        if not ruta or not os.path.isfile(ruta):
+            messagebox.showerror("Error", "Selecciona un fichero PDF valido.")
+            return
+        self.btn.configure(state="disabled")
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.configure(state="disabled")
+        self.progress.start(10)
+        self.estado.set("Procesando...")
+        threading.Thread(target=self._proceso, args=(ruta,), daemon=True).start()
 
-    def process(self):
-        indice = self.ruta.get()
-        raiz = os.path.dirname(indice)
+    def _proceso(self, indice_path):
+        try:
+            dir_raiz = os.path.dirname(indice_path)
+            visitados = set()
+            lista = []
 
-        visitados = set()
-        lista = []
+            self._log("=" * 62)
+            self._log(f"Indice:  {os.path.basename(indice_path)}")
+            self._log(f"Carpeta: {dir_raiz}")
+            self._log("=" * 62)
+            self._log("Resolviendo vinculos...\n")
 
-        self.logf("Iniciando...")
+            procesar_pdf(indice_path, dir_raiz, visitados, lista, self._log)
 
-        procesar_pdf(indice, raiz, visitados, lista, self.logf)
+            self._log(f"\n{len(lista)} PDFs encontrados")
+            self._log("=" * 62)
 
-        self.logf("Fusionando...")
+            nombre = os.path.splitext(os.path.basename(indice_path))[0]
+            salida = os.path.join(dir_raiz, nombre + "_DOSSIER_COMPLETO.pdf")
 
-        doc, offsets = fusionar_con_offsets(lista, self.logf)
+            n = fusionar_con_vinculos(lista, salida, dir_raiz, self._log)
 
-        self.logf("Reescribiendo links...")
-
-        reescribir_links(doc, offsets, self.logf)
-
-        salida = os.path.join(raiz, "DOSSIER_FINAL.pdf")
-        doc.save(salida)
-
-        self.logf("✔ listo: " + salida)
-        messagebox.showinfo("OK", "PDF generado")
+            self._log("=" * 62)
+            self.estado.set(f"Completado - {len(lista)} docs, {n} vinculos recalculados")
+            messagebox.showinfo(
+                "Completado",
+                f"Dossier generado con {len(lista)} documentos.\n"
+                f"{n} hipervinculos recalculados correctamente.\n\n"
+                f"Guardado en:\n{salida}"
+            )
+        except Exception as e:
+            import traceback
+            self._log(f"\nError: {e}")
+            self._log(traceback.format_exc())
+            self.estado.set("Error durante el proceso")
+            messagebox.showerror("Error inesperado", str(e))
+        finally:
+            self.progress.stop()
+            self.btn.configure(state="normal")
 
 
 if __name__ == "__main__":
-    App().mainloop()
+    app = App()
+    app.mainloop()
